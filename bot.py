@@ -3,7 +3,9 @@ import logging
 import requests
 import re
 import asyncio
+import threading
 from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -20,6 +22,25 @@ GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 groq_client = Groq(api_key=GROQ_API_KEY)
 
 
+# ── Tiny web server so Render stays happy ──────────────
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"NyayBot is running!")
+
+    def log_message(self, format, *args):
+        pass  # Silence access logs
+
+
+def run_health_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    logger.info("Health server running on port " + str(port))
+    server.serve_forever()
+
+
+# ── Indian Kanoon Search ───────────────────────────────
 def search_indian_kanoon(query):
     try:
         search_url = "https://indiankanoon.org/search/?formInput=" + query.replace(" ", "+")
@@ -42,6 +63,7 @@ def search_indian_kanoon(query):
         return []
 
 
+# ── Groq AI Answer ─────────────────────────────────────
 def ask_groq(question, context=""):
     system_prompt = (
         "You are NyayBot, an expert Indian legal research assistant. "
@@ -78,6 +100,7 @@ def ask_groq(question, context=""):
         return "AI error: " + str(e) + ". Please try again."
 
 
+# ── Telegram Handlers ──────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("Search Judgments", callback_data="help_search")],
@@ -144,7 +167,11 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text("Thinking...")
     answer = ask_groq(question)
-    await msg.edit_text("Question: " + question + "\n\nAnswer:\n" + answer + "\n\nNyayBot - Powered by Groq AI")
+    await msg.edit_text(
+        "Question: " + question + "\n\n"
+        "Answer:\n" + answer + "\n\n"
+        "NyayBot - Powered by Groq AI"
+    )
 
 
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -233,6 +260,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+# ── Main ───────────────────────────────────────────────
 async def run_bot():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
@@ -252,4 +280,9 @@ async def run_bot():
 
 
 if __name__ == "__main__":
+    # Start health server in background thread
+    health_thread = threading.Thread(target=run_health_server, daemon=True)
+    health_thread.start()
+
+    # Start the bot
     asyncio.run(run_bot())
